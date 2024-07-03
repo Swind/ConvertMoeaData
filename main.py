@@ -1,231 +1,62 @@
-import json
+import argparse
+import os
 
-import pandas as pd
+import converter
+import query
 
-from sect.sectcode import SectCodeConverter
-
-sheet_name_list = [
-    "11201",
-    "11202",
-    "11203",
-    "11205",
-    "11206",
-    "11207",
-    "11208",
-    "11209",
-    "11210",
-    "11211",
-    "11212",
-]
-
-ROW_NAME: dict[str, str] = {
-    "id": "ID",
-    "number": "編號",
-    "city": "市縣",
-    "sectname": "地號",
-    # "sectcode": "地號代碼",
-    "usage_zone": "使用分區",
-    "use": "使用地",
-    "status": "市縣政府查處情形",
-}
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
-class LandUseViolation:
-    id: str
-    year: str
-    month: str
-    number: str
-    city: str
-    sectname: str
-    sectcode: str
-    land_numbers: list[str]
-    usage_zone: str
-    use: str
-    status: list[str]
+def convert_xlsx_to_json(year: str):
+    sheet_name_list = []
+    for i in range(1, 13):
+        sheet_name_list.append(f"{year}{i:02d}")
 
-    def __init__(
-        self,
-        id: str,
-        year: str,
-        month: str,
-        number: str,
-        city: str,
-        sectname: str,
-        sectcode: str,
-        land_numbers: list[str],
-        usage_zone: str,
-        use: str,
-        status: list[str],
-    ):
-        self.id = id
-        self.year = year
-        self.month = month
-        self.number = number
-        self.city = city
-        self.sectname = sectname
-        self.sectcode = sectcode
-        self.land_numbers = land_numbers
-        self.usage_zone = usage_zone
-        self.use = use
-        self.status = status
+    xlsx_file_name = f"{year}.xlsx"
+    xlsx_file_path = os.path.join(SCRIPT_DIR, "xlsx", xlsx_file_name)
 
-    def diff(self, other: "LandUseViolation") -> "LandUseViolation":
-        if self.id != other.id:
-            raise ValueError(
-                f"Cannot diff two different LandUseViolation {self.id} and {other.id}"
-            )
+    json_file_name = f"{year}.json"
+    json_file_path = os.path.join(SCRIPT_DIR, "json", json_file_name)
 
-        id = self.id
-        new_number = other.number if self.number != other.number else ""
-        new_year = other.year if self.year != other.year else ""
-        new_month = other.month if self.month != other.month else ""
-        new_city = other.city if self.city != other.city else ""
-        new_sectname = other.sectname if self.sectname != other.sectname else ""
-        new_sectcode = other.sectcode if self.sectcode != other.sectcode else ""
-        new_land_numbers = list(set(other.land_numbers) - set(self.land_numbers))
-        new_usage_zone = other.usage_zone if self.usage_zone != other.usage_zone else ""
-        new_use = other.use if self.use != other.use else ""
-        new_status = list(set(other.status) - set(self.status))
-
-        return LandUseViolation(
-            id,
-            new_year,
-            new_month,
-            new_number,
-            new_city,
-            new_sectname,
-            new_sectcode,
-            new_land_numbers,
-            new_usage_zone,
-            new_use,
-            new_status,
-        )
-
-    def to_dict(self) -> dict[str, str | list[str]]:
-        return {
-            "id": self.id,
-            "year": self.year,
-            "month": self.month,
-            "number": self.number,
-            "city": self.city,
-            "sectname": self.sectname,
-            "sectcode": self.sectcode,
-            "land_numbers": self.land_numbers,
-            "usage_zone": self.usage_zone,
-            "use": self.use,
-            "status": self.status,
-        }
+    parser = converter.Parser()
+    xlsx = converter.open_xlsx(xlsx_file_path, sheet_name_list)
+    parser.parse_all_sheets(xlsx)
+    parser.save(json_file_path)
 
 
-# If the year is 11201, the id format will be 112010001, 112010002, 112010003, ...
-class IDGenerator:
-    year: str
-    index: int
-
-    def __init__(self, year: str):
-        self.year = year
-        self.index = 1
-
-    def generate_id(self) -> str:
-        id = f"{self.year}{self.index:04d}"
-        self.index += 1
-        return id
-
-
-def open_xlsx(file_path: str, sheet_name_list: list) -> dict[str, pd.DataFrame]:
-    xlsx = pd.read_excel(file_path, sheet_name=sheet_name_list)
-    return xlsx
-
-
-def save_xlsx(xlsx: pd.DataFrame, file_path: str, sheet_name_list: list):
-    with pd.ExcelWriter(file_path) as writer:
-        for name in sheet_name_list:
-            xlsx[name].to_excel(writer, sheet_name=name)
-
-
-def row_to_model(row: pd.Series) -> LandUseViolation:
-    id = str(row[ROW_NAME["id"]])
-    number = str(row[ROW_NAME["number"]])
-    city = str(row[ROW_NAME["city"]])
-    sectname = str(row[ROW_NAME["sectname"]])
-    usage_zone = str(row[ROW_NAME["usage_zone"]])
-    use = str(row[ROW_NAME["use"]])
-    status_str = str(row[ROW_NAME["status"]])
-    status = status_str.split() if status_str != "" else []
-
-    return LandUseViolation(
-        id, "", "", number, city, sectname, "", [], usage_zone, use, status
+def main():
+    parser = argparse.ArgumentParser(description="Convert Excel files to JSON format.")
+    parser.add_argument(
+        "sub_command",
+        help="Subcommand to execute",
+        choices=["convert", "query-factory-id"],
+    )
+    parser.add_argument(
+        "-y",
+        "--year",
+        type=int,
+        required=True,
+        help="Specify the year in ROC (Republic of China) format to convert the corresponding Excel file.",
     )
 
+    args = parser.parse_args()
 
-def parse_sheet(df: pd.DataFrame) -> list[LandUseViolation]:
-    result: list[LandUseViolation] = []
-    for _, row in df.iterrows():
-        violation = row_to_model(row)
-        result.append(violation)
-
-    return result
-
-
-class Parser:
-    violation_dict: dict[str, LandUseViolation]
-    update_list: list[LandUseViolation]
-    converter: SectCodeConverter
-
-    def __init__(self):
-        self.violation_dict = {}
-        self.update_list = []
-        self.converter = SectCodeConverter()
-
-    def parse_all_sheets(self, xlsx: dict[str, pd.DataFrame]):
-        for sheet_name in sheet_name_list:
-            df = xlsx[sheet_name]
-            violation_list = parse_sheet(df)
-            id_generator = IDGenerator(sheet_name)
-            year = sheet_name[:3]
-            month = sheet_name[3:]
-
-            for violation in violation_list:
-                violation.year = year
-                violation.month = month
-
-                # If the violation is already in the violation_dict, diff it and add to update_list
-                if violation.sectname in self.violation_dict:
-                    violation.id = self.violation_dict[violation.sectname].id
-                    diff = self.violation_dict[violation.sectname].diff(violation)
-                    self.update_list.append(diff)
-                else:
-                    violation.id = id_generator.generate_id()
-                    code = self.converter.convert(violation.sectname)
-                    violation.sectcode = code.sect_code
-                    violation.land_numbers = code.land_numbers
-                    self.violation_dict[violation.sectname] = violation
-                    self.update_list.append(violation)
-
-    def save(self, file_path: str):
-        # Save violation_dict to json
-        violation_json_list = [
-            violation.to_dict() for _, violation in self.violation_dict.items()
-        ]
-        update_json_list = [violation.to_dict() for violation in self.update_list]
-
-        with open(file_path, "w") as f:
-            json.dump(
-                {
-                    "violations": violation_json_list,
-                    "updates": update_json_list,
-                },
-                f,
-                ensure_ascii=False,
-                indent=4,
-            )
+    if args.sub_command == "convert":
+        convert_xlsx_to_json(args.year)
+    elif args.sub_command == "query-factory-id":
+        json_file_name = f"{args.year}.json"
+        json_file_path = os.path.join(SCRIPT_DIR, "json", json_file_name)
+        query.query_factory_id(json_file_path)
 
 
 if __name__ == "__main__":
-    parser = Parser()
-    xlsx = open_xlsx("112.xlsx", sheet_name_list)
-    parser.parse_all_sheets(xlsx)
-    parser.save("112.json")
+    main()
+
+# if __name__ == "__main__":
+#     parser = converter.Parser()
+#     xlsx = converter.open_xlsx("112.xlsx", sheet_name_list)
+#     parser.parse_all_sheets(xlsx)
+#     parser.save("112.json")
 
 # if __name__ == "__main__":
 # converter = SectCodeConverter()
